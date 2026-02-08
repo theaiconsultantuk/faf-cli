@@ -17,6 +17,179 @@ import { generateFafContent } from "../utils/yaml-generator";
 import { FabFormatsProcessor, FabFormatsAnalysis } from "../engines/fab-formats-processor";
 import { relentlessExtractor } from "../engines/relentless-context-extractor";
 import { detectClaudeCode, type ClaudeCodeResult } from "../framework-detector";
+import { FrameworkDetector, type DetectionResult } from "../framework-detector";
+import { LocalProjectScanner, type LocalScanResult } from "../engines/local-project-scanner";
+import { analyzeReadmeWithAI, type AIReadmeResult } from "../engines/ai-readme-analyzer";
+
+// ============================================================================
+// TYPE-AWARE SCORING - Maps slots to categories, uses TYPE_DEFINITIONS
+// ============================================================================
+
+/**
+ * Maps each generator slot to a category matching the compiler's TYPE_DEFINITIONS.
+ * Categories: project, frontend, backend, universal, human
+ */
+const SLOT_CATEGORY_MAP: Record<string, string> = {
+  // project (always applicable)
+  'project_name': 'project',
+  'project_goal': 'project',
+  'main_language': 'project',
+  // frontend
+  'framework': 'frontend',
+  // backend
+  'backend': 'backend',
+  'server': 'backend',
+  'api_type': 'backend',
+  'database': 'backend',
+  // universal (build/deploy infrastructure)
+  'hosting': 'universal',
+  'cicd': 'universal',
+  'build_tool': 'universal',
+  'package_manager': 'universal',
+  'test_framework': 'universal',
+  'linter': 'universal',
+  // human (always applicable)
+  'who': 'human',
+  'what': 'human',
+  'why': 'human',
+  'where': 'human',
+  'when': 'human',
+  'how': 'human',
+};
+
+/**
+ * Maps project types to their applicable slot categories.
+ * Mirrors the compiler's TYPE_DEFINITIONS for consistency.
+ */
+const TYPE_APPLICABLE_CATEGORIES: Record<string, string[]> = {
+  // CLI/Tool Types (project + universal + human)
+  'cli': ['project', 'universal', 'human'],
+  'cli-tool': ['project', 'universal', 'human'],
+  'cli-ts': ['project', 'universal', 'human'],
+  'cli-js': ['project', 'universal', 'human'],
+  // Library/Package Types (project + universal + human)
+  'library': ['project', 'universal', 'human'],
+  'npm-package': ['project', 'universal', 'human'],
+  'pip-package': ['project', 'universal', 'human'],
+  'crate': ['project', 'universal', 'human'],
+  'typescript': ['project', 'universal', 'human'],
+  // AI/ML Types (project + backend + human)
+  'data-science': ['project', 'backend', 'human'],
+  'ml-model': ['project', 'backend', 'human'],
+  'mcp-server': ['project', 'backend', 'human'],
+  // Backend/API Types (project + backend + universal + human)
+  'backend-api': ['project', 'backend', 'universal', 'human'],
+  'node-api': ['project', 'backend', 'universal', 'human'],
+  'node-api-ts': ['project', 'backend', 'universal', 'human'],
+  'python-api': ['project', 'backend', 'universal', 'human'],
+  'python-app': ['project', 'backend', 'human'],
+  'python-generic': ['project', 'backend', 'human'],
+  'go-api': ['project', 'backend', 'universal', 'human'],
+  'rust-api': ['project', 'backend', 'universal', 'human'],
+  // Frontend Types (project + frontend + universal + human)
+  'frontend': ['project', 'frontend', 'universal', 'human'],
+  'react': ['project', 'frontend', 'universal', 'human'],
+  'react-ts': ['project', 'frontend', 'universal', 'human'],
+  'vue': ['project', 'frontend', 'universal', 'human'],
+  'vue-ts': ['project', 'frontend', 'universal', 'human'],
+  'svelte': ['project', 'frontend', 'universal', 'human'],
+  'svelte-ts': ['project', 'frontend', 'universal', 'human'],
+  'angular': ['project', 'frontend', 'universal', 'human'],
+  'static-html': ['project', 'frontend', 'human'],
+  // Fullstack Types (all categories)
+  'fullstack': ['project', 'frontend', 'backend', 'universal', 'human'],
+  'fullstack-ts': ['project', 'frontend', 'backend', 'universal', 'human'],
+  'nextjs': ['project', 'frontend', 'backend', 'universal', 'human'],
+  'django': ['project', 'frontend', 'backend', 'universal', 'human'],
+  'rails': ['project', 'frontend', 'backend', 'universal', 'human'],
+  // Mobile Types (project + frontend + human)
+  'mobile': ['project', 'frontend', 'human'],
+  'react-native': ['project', 'frontend', 'human'],
+  'flutter': ['project', 'frontend', 'human'],
+  'ios': ['project', 'frontend', 'human'],
+  'android': ['project', 'frontend', 'human'],
+  // Desktop Types (project + frontend + human)
+  'desktop': ['project', 'frontend', 'human'],
+  'electron': ['project', 'frontend', 'human'],
+  'tauri': ['project', 'frontend', 'human'],
+  // DevOps/Infra Types (project + human)
+  'terraform': ['project', 'human'],
+  'kubernetes': ['project', 'human'],
+  'docker': ['project', 'human'],
+  'infrastructure': ['project', 'human'],
+  // Documentation Types (project + human)
+  'documentation': ['project', 'human'],
+  'cookbook': ['project', 'human'],
+};
+
+/**
+ * Maps AI-suggested project types to FAF TYPE_DEFINITION keys
+ */
+const AI_TYPE_TO_FAF_TYPE: Record<string, string> = {
+  'cli': 'cli',
+  'library': 'library',
+  'web-app': 'frontend',
+  'api': 'backend-api',
+  'mobile-app': 'mobile',
+  'desktop-app': 'desktop',
+  'framework': 'library',
+  'tool': 'cli',
+  'plugin': 'library',
+  'data-science': 'data-science',
+  'devops': 'infrastructure',
+};
+
+/**
+ * Infer the correct project type using scanner, AI, and framework detector.
+ * Overrides the broken detectProjectType() which misclassifies C++ projects as python-generic.
+ */
+function inferProjectType(
+  scanResult: LocalScanResult,
+  aiProjectType: string | undefined,
+  frameworkResult: DetectionResult | null,
+  originalType: string | undefined
+): string {
+  // Priority 1: AI-suggested type (most semantically accurate)
+  if (aiProjectType) {
+    const mapped = AI_TYPE_TO_FAF_TYPE[aiProjectType];
+    if (mapped && TYPE_APPLICABLE_CATEGORIES[mapped]) return mapped;
+    // Try direct match
+    if (TYPE_APPLICABLE_CATEGORIES[aiProjectType]) return aiProjectType;
+  }
+
+  // Priority 2: Framework detector result
+  if (frameworkResult?.framework) {
+    const fw = frameworkResult.framework.toLowerCase().replace(/\s+/g, '-');
+    if (TYPE_APPLICABLE_CATEGORIES[fw]) return fw;
+  }
+
+  // Priority 3: Language-based inference (fixes python-generic for C++ projects)
+  const lang = scanResult.primaryLanguage;
+  if (['C', 'C++', 'Rust', 'Go', 'Zig'].includes(lang)) {
+    // Systems languages without web framework → library
+    return 'library';
+  }
+
+  // Priority 4: Original type (if valid and not a misclassification)
+  if (originalType && TYPE_APPLICABLE_CATEGORIES[originalType]) {
+    return originalType;
+  }
+
+  // Default: fullstack (all slots applicable - no N/A benefit)
+  return 'fullstack';
+}
+
+/**
+ * Get applicable slots for a project type.
+ * Returns the list of slot names that should be scored.
+ */
+function getApplicableSlots(projectType: string): string[] {
+  const categories = TYPE_APPLICABLE_CATEGORIES[projectType]
+    || ['project', 'frontend', 'backend', 'universal', 'human']; // Default: all
+
+  const allSlots = Object.keys(SLOT_CATEGORY_MAP);
+  return allSlots.filter(slot => categories.includes(SLOT_CATEGORY_MAP[slot]));
+}
 
 export interface GenerateOptions {
   projectType?: string;
@@ -41,14 +214,27 @@ export async function generateFafFromProject(
     throw new Error(`Invalid projectRoot: ${projectRoot}. Expected a valid directory path.`);
   }
 
-  // Read README.md if available (HUMAN CONTEXT SOURCE)
-  let readmeData: any = {};
-  const readmePath = path.join(projectRoot, "README.md");
+  // 🔍 LOCAL PROJECT SCANNER - The Pauly Engine
+  // Runs comprehensive local analysis equivalent to faf git's GitHub API calls
+  const scanner = new LocalProjectScanner(projectRoot);
+  const scanResult: LocalScanResult = await scanner.scan();
+
+  // 🏎️ FRAMEWORK DETECTOR - 6-tier detection (was NOT used by init before!)
+  let frameworkResult: DetectionResult | null = null;
   try {
-    const readmeContent = await fs.readFile(readmePath, "utf-8");
-    readmeData = extractReadmeContext(readmeContent);
+    const detector = new FrameworkDetector(projectRoot);
+    frameworkResult = await detector.detect();
   } catch {
-    // Continue without README data
+    // Continue without framework detection
+  }
+
+  // Read README.md if available (HUMAN CONTEXT SOURCE)
+  // Now uses the scanner's structured README parsing instead of broken regex
+  const readmeData: any = {};
+  if (scanResult.readme.exists) {
+    readmeData.projectName = scanResult.readme.name;
+    readmeData.description = scanResult.readme.description;
+    readmeData.targetUser = scanResult.readme.who;
   }
 
   // Read package.json if available (JavaScript projects)
@@ -182,6 +368,144 @@ export async function generateFafFromProject(
     contextSlotsFilled['hosting'] = options.hosting;
   }
 
+  // 🔍 LOCAL SCANNER RESULTS - Fill slots from filesystem analysis
+  // Primary language from actual file scanning (like GitHub API)
+  if (scanResult.primaryLanguage && scanResult.primaryLanguage !== 'Unknown') {
+    contextSlotsFilled['main_language'] = scanResult.primaryLanguage;
+  }
+
+  // Framework detection results (6-tier detector, was NOT used before!)
+  if (frameworkResult && frameworkResult.framework !== 'Unknown') {
+    if (!contextSlotsFilled['framework']) {
+      contextSlotsFilled['framework'] = frameworkResult.framework;
+    }
+    if (frameworkResult.language && !contextSlotsFilled['main_language']) {
+      contextSlotsFilled['main_language'] = frameworkResult.language;
+    }
+    if (frameworkResult.ecosystem) {
+      contextSlotsFilled['package_manager'] = frameworkResult.ecosystem;
+    }
+  }
+
+  // 🧠 AI-ASSISTED README ANALYSIS (if API key available)
+  // Uses Haiku (Anthropic) or free models (OpenRouter) for semantic extraction
+  let aiResult: AIReadmeResult | null = null;
+  if (scanResult.readme.exists) {
+    try {
+      const readmePath = path.join(projectRoot, 'README.md');
+      const readmeContent = await fs.readFile(readmePath, 'utf-8');
+      const projectName = scanResult.readme.name || path.basename(projectRoot);
+      aiResult = await analyzeReadmeWithAI(
+        readmeContent,
+        scanResult.languageStrings,
+        projectName
+      );
+    } catch {
+      // AI analysis failed - continue with local parsing
+    }
+  }
+
+  // Fill slots: AI results take priority over local regex for human context
+  if (aiResult) {
+    // AI-extracted human context (much more accurate than regex)
+    if (aiResult.description && !contextSlotsFilled['project_goal']) {
+      contextSlotsFilled['project_goal'] = aiResult.description;
+    }
+    if (aiResult.who && !contextSlotsFilled['who']) {
+      contextSlotsFilled['who'] = aiResult.who;
+    }
+    if (aiResult.what && !contextSlotsFilled['what']) {
+      contextSlotsFilled['what'] = aiResult.what;
+    }
+    if (aiResult.why && !contextSlotsFilled['why']) {
+      contextSlotsFilled['why'] = aiResult.why;
+    }
+    if (aiResult.where && !contextSlotsFilled['where']) {
+      contextSlotsFilled['where'] = aiResult.where;
+    }
+    if (aiResult.when && !contextSlotsFilled['when']) {
+      contextSlotsFilled['when'] = aiResult.when;
+    }
+    if (aiResult.how && !contextSlotsFilled['how']) {
+      contextSlotsFilled['how'] = aiResult.how;
+    }
+    // AI-suggested project type (if detected)
+    if (aiResult.projectType) {
+      contextSlotsFilled['_ai_project_type'] = aiResult.projectType;
+    }
+  }
+
+  // Local README-derived context (fallback if AI didn't fill)
+  if (scanResult.readme.exists) {
+    if (scanResult.readme.name && !contextSlotsFilled['project_name']) {
+      contextSlotsFilled['project_name'] = scanResult.readme.name;
+    }
+    if (scanResult.readme.description && !contextSlotsFilled['project_goal']) {
+      contextSlotsFilled['project_goal'] = scanResult.readme.description;
+    }
+    if (scanResult.readme.who && !contextSlotsFilled['who']) {
+      contextSlotsFilled['who'] = scanResult.readme.who;
+    }
+    if (scanResult.readme.what && !contextSlotsFilled['what']) {
+      contextSlotsFilled['what'] = scanResult.readme.what;
+    }
+    if (scanResult.readme.why && !contextSlotsFilled['why']) {
+      contextSlotsFilled['why'] = scanResult.readme.why;
+    }
+    if (scanResult.readme.where && !contextSlotsFilled['where']) {
+      contextSlotsFilled['where'] = scanResult.readme.where;
+    }
+    if (scanResult.readme.when && !contextSlotsFilled['when']) {
+      contextSlotsFilled['when'] = scanResult.readme.when;
+    }
+    if (scanResult.readme.how && !contextSlotsFilled['how']) {
+      contextSlotsFilled['how'] = scanResult.readme.how;
+    }
+  }
+
+  // License detection
+  if (scanResult.hasLicense && scanResult.licenseName) {
+    contextSlotsFilled['license'] = scanResult.licenseName;
+  }
+
+  // CI/CD detection
+  if (scanResult.hasCiCd && scanResult.cicdPlatform) {
+    contextSlotsFilled['cicd'] = scanResult.cicdPlatform;
+  }
+
+  // Test detection
+  if (scanResult.hasTests) {
+    contextSlotsFilled['test_framework'] = 'Detected (tests/ directory)';
+  }
+
+  // Docker detection
+  if (scanResult.hasDocker) {
+    contextSlotsFilled['hosting'] = contextSlotsFilled['hosting'] || 'Docker';
+  }
+
+  // Build tool detection from top-level files
+  if (!contextSlotsFilled['build_tool']) {
+    const topFiles = scanResult.topLevelStructure.map(f => f.path);
+    if (topFiles.includes('CMakeLists.txt')) {
+      contextSlotsFilled['build_tool'] = 'CMake';
+    } else if (topFiles.includes('Makefile')) {
+      contextSlotsFilled['build_tool'] = 'Make';
+    } else if (topFiles.includes('meson.build')) {
+      contextSlotsFilled['build_tool'] = 'Meson';
+    } else if (topFiles.includes('build.gradle') || topFiles.includes('build.gradle.kts')) {
+      contextSlotsFilled['build_tool'] = 'Gradle';
+    } else if (topFiles.includes('pom.xml')) {
+      contextSlotsFilled['build_tool'] = 'Maven';
+    } else if (topFiles.includes('build.zig')) {
+      contextSlotsFilled['build_tool'] = 'Zig Build';
+    }
+  }
+
+  // Framework detector can provide additional context
+  if (frameworkResult && !contextSlotsFilled['framework']) {
+    contextSlotsFilled['framework'] = frameworkResult.framework;
+  }
+
   // Apply championship context extraction
   if (fabAnalysis.context) {
     const ctx = fabAnalysis.context;
@@ -202,33 +526,34 @@ export async function generateFafFromProject(
     if (ctx.testFramework) {contextSlotsFilled['test_framework'] = ctx.testFramework;}
     if (ctx.linter) {contextSlotsFilled['linter'] = ctx.linter;}
 
-    // Human context slots (6 W's)
-    if (ctx.targetUser) {contextSlotsFilled['who'] = ctx.targetUser;}
-    if (ctx.coreProblem) {contextSlotsFilled['what'] = ctx.coreProblem;}
-    if (ctx.missionPurpose) {contextSlotsFilled['why'] = ctx.missionPurpose;}
-    if (ctx.deploymentMarket) {contextSlotsFilled['where'] = ctx.deploymentMarket;}
-    if (ctx.timeline) {contextSlotsFilled['when'] = ctx.timeline;}
-    if (ctx.approach) {contextSlotsFilled['how'] = ctx.approach;}
+    // Human context slots (6 W's) - only fill if NOT already set by AI
+    if (ctx.targetUser && !contextSlotsFilled['who']) {contextSlotsFilled['who'] = ctx.targetUser;}
+    if (ctx.coreProblem && !contextSlotsFilled['what']) {contextSlotsFilled['what'] = ctx.coreProblem;}
+    if (ctx.missionPurpose && !contextSlotsFilled['why']) {contextSlotsFilled['why'] = ctx.missionPurpose;}
+    if (ctx.deploymentMarket && !contextSlotsFilled['where']) {contextSlotsFilled['where'] = ctx.deploymentMarket;}
+    if (ctx.timeline && !contextSlotsFilled['when']) {contextSlotsFilled['when'] = ctx.timeline;}
+    if (ctx.approach && !contextSlotsFilled['how']) {contextSlotsFilled['how'] = ctx.approach;}
   }
 
-  // Apply RELENTLESS human context extraction (overrides if higher confidence)
+  // Apply RELENTLESS human context extraction (only if slot not already filled)
+  // AI-extracted context takes priority over regex-based extraction
   if (humanContext) {
-    if (humanContext.who.confidence === 'CERTAIN' || !contextSlotsFilled['who']) {
+    if (!contextSlotsFilled['who'] && humanContext.who.value) {
       contextSlotsFilled['who'] = humanContext.who.value;
     }
-    if (humanContext.what.confidence === 'CERTAIN' || !contextSlotsFilled['what']) {
+    if (!contextSlotsFilled['what'] && humanContext.what.value) {
       contextSlotsFilled['what'] = humanContext.what.value;
     }
-    if (humanContext.why.confidence === 'CERTAIN' || !contextSlotsFilled['why']) {
+    if (!contextSlotsFilled['why'] && humanContext.why.value) {
       contextSlotsFilled['why'] = humanContext.why.value;
     }
-    if (humanContext.where.confidence === 'CERTAIN' || !contextSlotsFilled['where']) {
+    if (!contextSlotsFilled['where'] && humanContext.where.value) {
       contextSlotsFilled['where'] = humanContext.where.value;
     }
-    if (humanContext.when.confidence === 'CERTAIN' || !contextSlotsFilled['when']) {
+    if (!contextSlotsFilled['when'] && humanContext.when.value) {
       contextSlotsFilled['when'] = humanContext.when.value;
     }
-    if (humanContext.how.confidence === 'CERTAIN' || !contextSlotsFilled['how']) {
+    if (!contextSlotsFilled['how'] && humanContext.how.value) {
       contextSlotsFilled['how'] = humanContext.how.value;
     }
   }
@@ -380,7 +705,21 @@ export async function generateFafFromProject(
     contextSlotsFilled['who'] = readmeData.targetUser;
   }
 
-  // Calculate slot-based score
+  // ============================================================================
+  // TYPE-AWARE SCORING - Only score applicable slots (N/A = subtract from total)
+  // ============================================================================
+
+  // Infer the correct project type from scanner + AI + framework detector
+  const inferredType = inferProjectType(
+    scanResult,
+    contextSlotsFilled['_ai_project_type'],
+    frameworkResult,
+    projectType
+  );
+
+  // Get applicable slots for this project type
+  const applicableSlots = getApplicableSlots(inferredType);
+
   const technicalSlots = [
     'project_name', 'project_goal', 'main_language', 'framework',
     'backend', 'server', 'api_type', 'database', 'hosting',
@@ -390,20 +729,44 @@ export async function generateFafFromProject(
 
   let technicalFilled = 0;
   let humanFilled = 0;
+  let applicableTechCount = 0;
+  let applicableHumanCount = 0;
 
+  // First pass: count applicable slots
   technicalSlots.forEach(slot => {
-    if (contextSlotsFilled[slot]) {
+    if (applicableSlots.includes(slot)) {
+      applicableTechCount++;
+    }
+  });
+  humanSlots.forEach(slot => {
+    if (applicableSlots.includes(slot)) {
+      applicableHumanCount++;
+    }
+  });
+
+  // Scale slot points so max from applicable slots ≈ 86 (same as 21-slot max: 14*4 + 6*5)
+  const maxSlotPoints = 86;
+  const applicableMaxRaw = applicableTechCount * 4 + applicableHumanCount * 5;
+  const slotScale = applicableMaxRaw > 0 ? maxSlotPoints / applicableMaxRaw : 1;
+
+  // Second pass: score filled slots with scaled points
+  technicalSlots.forEach(slot => {
+    if (applicableSlots.includes(slot) && contextSlotsFilled[slot]) {
       technicalFilled++;
-      enhancedScore += 4; // Each technical slot = 4%
+      enhancedScore += 4 * slotScale;
     }
   });
 
   humanSlots.forEach(slot => {
-    if (contextSlotsFilled[slot]) {
+    if (applicableSlots.includes(slot) && contextSlotsFilled[slot]) {
       humanFilled++;
-      enhancedScore += 5; // Each human slot = 5%
+      enhancedScore += 5 * slotScale;
     }
   });
+
+  const totalApplicable = applicableTechCount + applicableHumanCount;
+  const totalFilled = technicalFilled + humanFilled;
+  const naSlotCount = 20 - totalApplicable; // How many slots were N/A
 
   // Quality bonuses from FAB-FORMATS
   if (fabAnalysis.qualityMetrics) {
@@ -494,8 +857,12 @@ export async function generateFafFromProject(
     packageManager: contextSlotsFilled['package_manager'] || undefined,
     cicd: contextSlotsFilled['cicd'] || undefined,
     fafScore,
-    slotBasedPercentage: Math.round(((technicalFilled + humanFilled) / 21) * 100),
-    projectType,  // Pass project type for compiler slot-filling patterns
+    slotBasedPercentage: totalApplicable > 0
+      ? Math.round((totalFilled / totalApplicable) * 100)
+      : 0,
+    projectType: inferredType,  // Use inferred type (fixes python-generic misclassification)
+    totalSlots: totalApplicable,
+    naSlots: naSlotCount,
     // Human Context (Project Details)
     targetUser: contextSlotsFilled['who'],
     coreProblem: contextSlotsFilled['what'],
@@ -512,7 +879,23 @@ export async function generateFafFromProject(
       depth: fabAnalysis.qualityMetrics.intelligenceDepth
     },
     // Claude Code detection results
-    claudeCode: claudeCodeResult
+    claudeCode: claudeCodeResult,
+    // 🔍 Local Scanner Results (Pauly Engine)
+    localScan: {
+      languages: scanResult.languageStrings,
+      primaryLanguage: scanResult.primaryLanguage,
+      structure: scanResult.topLevelStructure,
+      totalFiles: scanResult.totalFiles,
+      hasLicense: scanResult.hasLicense,
+      licenseName: scanResult.licenseName,
+      hasTests: scanResult.hasTests,
+      hasCiCd: scanResult.hasCiCd,
+      cicdPlatform: scanResult.cicdPlatform,
+      hasDocker: scanResult.hasDocker,
+      qualityScore: scanResult.qualityScore,
+      qualityTier: scanResult.qualityTier,
+      qualityFactors: scanResult.qualityFactors,
+    }
   };
 
   // Generate YAML content

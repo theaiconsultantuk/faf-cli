@@ -5,6 +5,126 @@ All notable changes to faf-cli will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [4.2.0] - 2026-02-08 — The Pauly Engine: Intelligent Local Scanning
+
+### The Problem
+
+`faf init` scored **33%** on local projects while `faf git` scored **90%** on the same project via GitHub API. The gap existed because:
+
+1. **No language detection** - init couldn't scan file extensions to detect languages with percentages (C++ 44.3%, C 35.1%, etc.) like the GitHub API does
+2. **Broken README parsing** - Regex grabbed badge images (`![whisper.cpp](url)`) as the project description instead of the actual first paragraph
+3. **No framework detection** - The 6-tier FrameworkDetector existed in the codebase but was never wired into init
+4. **Hardcoded defaults** - YAML output contained marketing copy (`🚀 Make Your AI Happy!`) and FAF-specific branding as default values
+5. **Type misclassification** - `detectProjectType()` saw any `.py` file and returned `python-generic`, even for C++ projects with 0.6% Python
+6. **Unfair scoring** - All 21 slots counted equally regardless of project type. A C++ library was penalized for not having a CSS framework or database
+
+### What Changed
+
+#### New Files
+
+**`src/engines/local-project-scanner.ts`** - The core new engine
+
+Provides GitHub-API-equivalent intelligence from the local filesystem without any network calls:
+
+- **Language scanning** - Walks the file tree, maps 80+ file extensions to languages, calculates byte-based percentages (matching GitHub's format: `"C++ (44.3%)"`)
+- **Structured README parsing** - Extracts H1 as project name, first non-badge/non-image paragraph as description, `##` sections as context. Skips badge lines (`[![...](...)](#)`) and image lines (`![...](...)`)
+- **License detection** - Finds LICENSE/LICENCE/COPYING files, identifies MIT/Apache/GPL/BSD/ISC/MPL from content
+- **Test detection** - Checks for `tests/`, `test/`, `spec/`, `__tests__/` directories
+- **CI/CD detection** - Identifies GitHub Actions, GitLab CI, CircleCI, Travis, Jenkins, Azure Pipelines from config file presence
+- **Docker detection** - Looks for Dockerfile, docker-compose.yml, .dockerignore
+- **Quality scoring** - Mirrors `faf git`'s `calculateRepoQualityScore()` using local signals (description, README, license, tests, CI/CD, Docker, multi-language, structured README)
+- **Smart exclusions** - Skips `node_modules`, `.git`, `build`, `dist`, binary files, lock files, and config-only languages (JSON, YAML, Markdown) from percentage calculations
+
+**`src/engines/ai-readme-analyzer.ts`** - AI-assisted semantic README analysis
+
+Uses a fast AI model to extract structured meaning from READMEs when regex isn't enough:
+
+- **Auto-detects provider** from `ANTHROPIC_API_KEY` (uses Claude Haiku) or `OPENROUTER_API_KEY` (uses free models)
+- **OpenRouter free model fallback chain**: `google/gemma-3-12b-it:free` (most reliable) -> `google/gemma-3-27b-it:free` -> `meta-llama/llama-3.3-70b-instruct:free` -> `mistralai/mistral-small-3.1-24b-instruct:free` -> `nvidia/nemotron-nano-9b-v2:free` -> `google/gemma-3-4b-it:free` -> `openrouter/free`
+- **Extracts structured JSON**: description, who, what, why, where, when, how, topics, projectType
+- **Truncates README to 4000 chars** to minimize cost
+- **Falls back gracefully** to null if no API key or all models fail - AI is optional, not required
+- **Handles response formats** including raw JSON and markdown code blocks
+
+#### Modified Files
+
+**`src/generators/faf-generator-championship.ts`** - Major overhaul of the init pipeline
+
+*New imports and integration:*
+- Imported `FrameworkDetector` (6-tier detection with 250+ patterns) - was in codebase but never used by init
+- Imported `LocalProjectScanner` for comprehensive local analysis
+- Imported `analyzeReadmeWithAI` for semantic README extraction
+
+*New type detection system (`inferProjectType()`):*
+- Priority 1: AI-suggested project type (most semantically accurate)
+- Priority 2: Framework detector result
+- Priority 3: Primary language inference (C/C++/Rust/Go/Zig -> `library`)
+- Priority 4: Original `detectProjectType()` result (only if valid)
+- Fixes whisper.cpp being classified as `python-generic` instead of `library`
+
+*New N/A-aware scoring system:*
+- Added `SLOT_CATEGORY_MAP` mapping each of the 20 slots to a category (project/frontend/backend/universal/human)
+- Added `TYPE_APPLICABLE_CATEGORIES` mapping 50+ project types to their applicable categories (mirrors the compiler's `TYPE_DEFINITIONS`)
+- `getApplicableSlots()` returns only the slots that matter for the detected type
+- Score calculated as `filled / applicable * 100` instead of `filled / 21 * 100`
+- Slot point values scaled proportionally so filling all applicable slots gives the same ~86 points regardless of project type
+- Example: `library` type -> categories `[project, universal, human]` -> 15 applicable slots (5 N/A)
+
+*New build tool detection:*
+- Detects CMake, Make, Meson, Gradle, Maven, Zig Build from top-level files
+- Framework detector result used to fill `framework` slot
+
+*Slot filling priority (prevents overwriting):*
+- AI results (most accurate) -> Local scanner -> FAB-FORMATS -> RELENTLESS extractor
+- All downstream fillers use guarded writes (`if (!contextSlotsFilled['what'])`) to avoid overwriting AI results with inferior regex extractions
+
+**`src/utils/yaml-generator.ts`** - Honest defaults and N/A scoring display
+
+*Removed hardcoded defaults:*
+- Removed `mission: '🚀 Make Your AI Happy! 🧡 Trust-Driven 🤖'`
+- Removed `revolution: '30 seconds replaces 20 minutes of questions'`
+- Removed `brand: 'F1-Inspired Software Engineering - Championship AI Context'`
+- Removed `next_milestone: 'npm_publication'`
+- Removed FAF-specific warnings (`'Never modify dial components without approval'`, etc.)
+- Replaced with generic: `'Follow existing code conventions'`, `'Test changes before committing'`
+
+*Fixed serialization:*
+- Array items containing objects now render as YAML flow mappings (`{path: "src", type: "dir", size: 0}`) instead of `[object Object]`
+- `detectKeyFiles()` no longer defaults to JS/TS files for all unknown projects; adds CMakeLists.txt/Makefile for C/C++
+
+*N/A scoring support:*
+- Accepts `totalSlots` and `naSlots` from generator
+- Displays `slots_filled: "13/15 (87%)"` instead of `"12/21 (57%)"`
+- Shows `na_slots: 5` in scores and ai_scoring_details sections
+
+*New YAML output sections:*
+- `languages.detected` - Full language breakdown with percentages
+- `structure` - Top-level directory/file listing with types and sizes
+- `local_quality` - Quality score, tier, and factor breakdown
+
+### Results
+
+| Project | Before | After (slot %) | Type |
+|---------|--------|----------------|------|
+| whisper.cpp (C++ library, 1121 files) | 33% | **87%** | `library` (was `python-generic`) |
+| MiroBoardDuplicator (Python scripts, 12 files) | 24% | **60%** | `cli` (was `python-generic`) |
+
+### Technical Notes
+
+- The `detectProjectType()` function in `src/utils/file-utils.ts` is unchanged. The new `inferProjectType()` overrides its result when better information is available from the scanner, AI, or framework detector
+- The compiler's `TYPE_DEFINITIONS` in `src/compiler/faf-compiler.ts` is unchanged. The generator mirrors its category system independently to avoid coupling
+- AI analysis is entirely optional - without an API key, scoring still improves from local scanning and type-aware N/A subtraction alone
+- The `faf git` command is unchanged - it uses a different scoring system (100-point quality score based on stars, activity, etc.)
+
+### Fork Information
+
+- **Upstream**: [Wolfe-Jam/faf-cli](https://github.com/Wolfe-Jam/faf-cli)
+- **Fork**: [theaiconsultantuk/faf-cli](https://github.com/theaiconsultantuk/faf-cli)
+- **Author**: Paul Cowen (The AI Consultant UK)
+- **Changes are additive** - no upstream code was deleted, only extended
+
+---
+
 ## [4.1.0] - 2026-01-31 — Gemini Native Handshake
 
 ### 🔷 Zero-Config Google AI Integration

@@ -97,14 +97,23 @@ function detectKeyFiles(data: any): string[] {
     files.push('build.zig', 'src/main.zig');
   }
 
-  // 🐍 PYTHON CONTEXT-ON-DEMAND: Add appropriate config files
-  // Only add JS/TS files for JavaScript/TypeScript projects
+  // Only add JS/TS config files for actual JavaScript/TypeScript projects
   const isJsTs = data.mainLanguage?.toLowerCase().includes('javascript') ||
-                 data.mainLanguage?.toLowerCase().includes('typescript') ||
-                 (!data.mainLanguage || data.mainLanguage === 'Unknown');
-  if (isJsTs && !data.mainLanguage?.toLowerCase().includes('python')) {
+                 data.mainLanguage?.toLowerCase().includes('typescript');
+  if (isJsTs) {
     files.push('package.json', 'tsconfig.json');
   }
+
+  // C/C++ projects
+  if (data.mainLanguage?.toLowerCase() === 'c' || data.mainLanguage?.toLowerCase() === 'c++') {
+    files.push('CMakeLists.txt', 'Makefile');
+  }
+
+  // Always add README.md if not already there
+  if (!files.includes('README.md')) {
+    files.push('README.md');
+  }
+
   return files.slice(0, 5); // Max 5 files
 }
 
@@ -176,9 +185,17 @@ function objectToYaml(obj: Record<string, any>, indent = 0): string {
     } else if (Array.isArray(value)) {
       yaml += `${spacing}${key}:\n`;
       for (const item of value) {
-        // Also escape array items if they're strings
-        const escapedItem = typeof item === 'string' ? escapeForYaml(item) : item;
-        yaml += `${spacing}  - ${escapedItem}\n`;
+        if (typeof item === 'object' && item !== null) {
+          // Handle objects in arrays (e.g. structure files)
+          const entries = Object.entries(item);
+          if (entries.length > 0) {
+            yaml += `${spacing}  - {${entries.map(([k, v]) => `${k}: ${typeof v === 'string' ? `"${v}"` : v}`).join(', ')}}\n`;
+          }
+        } else {
+          // Also escape array items if they're strings
+          const escapedItem = typeof item === 'string' ? escapeForYaml(item) : item;
+          yaml += `${spacing}  - ${escapedItem}\n`;
+        }
       }
     } else {
       // ALWAYS use escapeForYaml for strings to remove markdown and special chars
@@ -214,6 +231,8 @@ export function generateFafContent(projectData: {
   fafScore: number;
   slotBasedPercentage: number;
   projectType?: string;  // Project type for compiler slot-filling patterns
+  totalSlots?: number;   // Applicable slots (after N/A subtraction)
+  naSlots?: number;      // Number of N/A slots subtracted
   // Human Context (Project Details)
   targetUser?: string;
   coreProblem?: string;
@@ -240,9 +259,27 @@ export function generateFafContent(projectData: {
     hasClaudeMd: boolean;
     mcpServers: string[];
   } | null;
+  // Local Scanner Results (Pauly Engine)
+  localScan?: {
+    languages: string[];
+    primaryLanguage: string;
+    structure: { path: string; type: 'file' | 'dir'; size: number }[];
+    totalFiles: number;
+    hasLicense: boolean;
+    licenseName?: string;
+    hasTests: boolean;
+    hasCiCd: boolean;
+    cicdPlatform?: string;
+    hasDocker: boolean;
+    qualityScore: number;
+    qualityTier: string;
+    qualityFactors: Record<string, boolean>;
+  };
 }): string {
   // Calculate filled vs total slots for missing context
-  const totalSlotsCount = 21; // Base slots
+  // N/A slots are subtracted from total (type-aware scoring)
+  const totalSlotsCount = projectData.totalSlots || 21;
+  const naCount = projectData.naSlots || 0;
   const filledSlotsCount = Math.round((projectData.slotBasedPercentage / 100) * totalSlotsCount);
   const missingSlots = [];
   if (!projectData.targetUser) {missingSlots.push('Target users');}
@@ -299,9 +336,6 @@ export function generateFafContent(projectData: {
       goal: projectData.projectGoal ? escapeForYaml(projectData.projectGoal) : null,
       main_language: projectData.mainLanguage || 'Unknown',
       type: projectData.projectType || null,  // Project type for compiler slot-filling patterns
-      mission: '🚀 Make Your AI Happy! 🧡 Trust-Driven 🤖',
-      revolution: '30 seconds replaces 20 minutes of questions',
-      brand: 'F1-Inspired Software Engineering - Championship AI Context'
     },
     
     // 🧠 AI OPERATING INSTRUCTIONS
@@ -309,9 +343,7 @@ export function generateFafContent(projectData: {
       priority_order: [
         '1. Read THIS .faf file first',
         '2. Check CLAUDE.md for session context',
-        projectData.mainLanguage?.toLowerCase().includes('python') 
-          ? '3. Review requirements.txt and main.py for dependencies'
-          : '3. Review package.json for dependencies'
+        '3. Review project dependencies and structure'
       ],
       working_style: {
         code_first: true,
@@ -320,9 +352,8 @@ export function generateFafContent(projectData: {
         testing: 'required'
       },
       warnings: [
-        'Never modify dial components without approval',
-        'All TypeScript must pass strict mode',
-        'Test coverage required for new features'
+        'Follow existing code conventions',
+        'Test changes before committing'
       ]
     },
     
@@ -357,10 +388,7 @@ export function generateFafContent(projectData: {
     // 🚀 Project State
     state: {
       phase: 'development',
-      version: '1.0.0',
-      focus: 'production_deployment',
-      status: 'green_flag',
-      next_milestone: 'npm_publication',
+      status: 'active',
       blockers: []
     },
 
@@ -369,6 +397,7 @@ export function generateFafContent(projectData: {
       faf_score: projectData.fafScore || 0,
       slot_based_percentage: projectData.slotBasedPercentage || 0,
       total_slots: totalSlotsCount,
+      na_slots: naCount > 0 ? naCount : undefined,
       scoring_philosophy: 'F1-Inspired Championship Scoring'
     },
 
@@ -401,11 +430,33 @@ export function generateFafContent(projectData: {
       system_date: '2025-09-20',  // faf-engine-mk3 Championship Engine
       slot_based_percentage: projectData.slotBasedPercentage,
       ai_score: projectData.fafScore,
-      total_slots: 21,
+      total_slots: totalSlotsCount,
       filled_slots: filledSlotsCount,
+      na_slots: naCount > 0 ? naCount : undefined,
       scoring_method: 'Honest percentage - no fake minimums',
       trust_embedded: 'COUNT ONCE architecture - trust MY embedded scores'
     },
+
+    // 🔍 Languages Detected (Local Scanner - matches GitHub API format)
+    languages: projectData.localScan?.languages && projectData.localScan.languages.length > 0
+      ? { detected: projectData.localScan.languages }
+      : undefined,
+
+    // 📁 Project Structure (Top-level)
+    structure: projectData.localScan?.structure
+      ? {
+          total_files: projectData.localScan.totalFiles,
+          files: projectData.localScan.structure.slice(0, 30),
+        }
+      : undefined,
+
+    // 📋 Local Quality Assessment
+    local_quality: projectData.localScan ? {
+      score: projectData.localScan.qualityScore,
+      tier: projectData.localScan.qualityTier,
+      factors: projectData.localScan.qualityFactors,
+      license: projectData.localScan.licenseName || (projectData.localScan.hasLicense ? 'Detected' : 'Not found'),
+    } : undefined,
 
     // 🤖 Claude Code Integration (Boris-friendly detection, 2.1.0+)
     claude_code: projectData.claudeCode?.detected ? {
@@ -422,10 +473,10 @@ export function generateFafContent(projectData: {
   // Use native YAML library and fix any !CI placeholder issues
   const yamlContent = objectToYaml(fafData);
   
-  // Championship fix: Replace !CI placeholders with revolutionary content
-  const championshipContent = yamlContent
-    .replace(/what_building: !CI/g, 'what_building: "🚀 Universal AI-context CLI - Trust-Driven Infrastructure that eliminates developer anxiety"')
-    .replace(/goal: !CI/g, 'goal: "⚡️ Transform developer psychology from hope-driven to trust-driven AI development - 30 seconds replaces 20 minutes of questions"');
-  
-  return championshipContent;
+  // Fix any !CI placeholders (should not occur with proper data)
+  const cleanedContent = yamlContent
+    .replace(/what_building: !CI/g, 'what_building: null')
+    .replace(/goal: !CI/g, 'goal: null');
+
+  return cleanedContent;
 }
