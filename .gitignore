@@ -88,6 +88,7 @@ test-*.faf
 !CODE_OF_CONDUCT.md
 !SECURITY.md
 !SUPPORT.md
+!CODEX-PLAN.md
 !.github/**/*.md
 !commands/**/*.md
 !skills/**/*.md
