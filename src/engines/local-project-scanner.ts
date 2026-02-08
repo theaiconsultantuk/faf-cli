@@ -683,6 +683,33 @@ export class LocalProjectScanner {
   // ============================================================================
 
   private async scanTopLevelStructure(): Promise<{ path: string; type: 'file' | 'dir'; size: number }[]> {
+    // Directories to skip in structure output (generated/cache/junk)
+    const SKIP_STRUCTURE_DIRS = new Set([
+      '__pycache__', 'node_modules', '.git', '.svn', '.hg',
+      'dist', 'build', 'out', '.next', '.nuxt',
+      'venv', '.venv', 'env', '.env',
+      'coverage', '.idea', '.vscode', 'tmp', 'temp', 'logs',
+      '.cache', '.parcel-cache', '.turbo', '.output',
+      'target', '.cargo', 'zig-cache', 'zig-out',
+      'bower_components', 'jspm_packages',
+      '__MACOSX',
+    ]);
+
+    // File patterns to skip in structure output
+    const SKIP_STRUCTURE_PATTERNS = [
+      /\.bak(-\d+)?$/,          // .bak, .bak-20250911-025837
+      /\.log$/,                  // .log files
+      /\.tmp$/,                  // .tmp files
+      /\.swp$/,                  // vim swap files
+      /~$/,                      // editor backup files (file~)
+      /\.pyc$/,                  // compiled Python
+      /\.DS_Store$/,             // macOS metadata
+      /Thumbs\.db$/,             // Windows metadata
+    ];
+
+    // Max file size to show in structure (skip files > 1MB - likely generated/data)
+    const MAX_STRUCTURE_FILE_SIZE = 1_000_000;
+
     try {
       const entries = await fs.readdir(this.projectRoot, { withFileTypes: true });
       const results: { path: string; type: 'file' | 'dir'; size: number }[] = [];
@@ -691,9 +718,26 @@ export class LocalProjectScanner {
         if (entry.name.startsWith('.') && entry.name !== '.github' && entry.name !== '.devops') {
           continue; // Skip hidden files except .github and .devops
         }
+
+        // Skip junk directories
+        if (entry.isDirectory() && SKIP_STRUCTURE_DIRS.has(entry.name)) {
+          continue;
+        }
+
+        // Skip junk file patterns
+        if (!entry.isDirectory() && SKIP_STRUCTURE_PATTERNS.some(p => p.test(entry.name))) {
+          continue;
+        }
+
         try {
           const fullPath = path.join(this.projectRoot, entry.name);
           const stats = await fs.stat(fullPath);
+
+          // Skip oversized files (likely generated data, logs, media)
+          if (!entry.isDirectory() && stats.size > MAX_STRUCTURE_FILE_SIZE) {
+            continue;
+          }
+
           results.push({
             path: entry.name,
             type: entry.isDirectory() ? 'dir' : 'file',

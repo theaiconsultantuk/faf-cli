@@ -41,13 +41,14 @@ const SLOT_CATEGORY_MAP: Record<string, string> = {
   'server': 'backend',
   'api_type': 'backend',
   'database': 'backend',
-  // universal (build/deploy infrastructure)
-  'hosting': 'universal',
-  'cicd': 'universal',
-  'build_tool': 'universal',
-  'package_manager': 'universal',
-  'test_framework': 'universal',
-  'linter': 'universal',
+  // universal_core (applicable to almost everything - how you install/test)
+  'package_manager': 'universal_core',
+  'test_framework': 'universal_core',
+  // universal_infra (build/deploy infrastructure - not needed by simple tools)
+  'hosting': 'universal_infra',
+  'cicd': 'universal_infra',
+  'build_tool': 'universal_infra',
+  'linter': 'universal_infra',
   // human (always applicable)
   'who': 'human',
   'what': 'human',
@@ -62,56 +63,59 @@ const SLOT_CATEGORY_MAP: Record<string, string> = {
  * Mirrors the compiler's TYPE_DEFINITIONS for consistency.
  */
 const TYPE_APPLICABLE_CATEGORIES: Record<string, string[]> = {
-  // CLI/Tool Types (project + universal + human)
-  'cli': ['project', 'universal', 'human'],
-  'cli-tool': ['project', 'universal', 'human'],
-  'cli-ts': ['project', 'universal', 'human'],
-  'cli-js': ['project', 'universal', 'human'],
-  // Library/Package Types (project + universal + human)
-  'library': ['project', 'universal', 'human'],
-  'npm-package': ['project', 'universal', 'human'],
-  'pip-package': ['project', 'universal', 'human'],
-  'crate': ['project', 'universal', 'human'],
-  'typescript': ['project', 'universal', 'human'],
-  // AI/ML Types (project + backend + human)
-  'data-science': ['project', 'backend', 'human'],
-  'ml-model': ['project', 'backend', 'human'],
-  'mcp-server': ['project', 'backend', 'human'],
-  // Backend/API Types (project + backend + universal + human)
-  'backend-api': ['project', 'backend', 'universal', 'human'],
-  'node-api': ['project', 'backend', 'universal', 'human'],
-  'node-api-ts': ['project', 'backend', 'universal', 'human'],
-  'python-api': ['project', 'backend', 'universal', 'human'],
-  'python-app': ['project', 'backend', 'human'],
-  'python-generic': ['project', 'backend', 'human'],
-  'go-api': ['project', 'backend', 'universal', 'human'],
-  'rust-api': ['project', 'backend', 'universal', 'human'],
-  // Frontend Types (project + frontend + universal + human)
-  'frontend': ['project', 'frontend', 'universal', 'human'],
-  'react': ['project', 'frontend', 'universal', 'human'],
-  'react-ts': ['project', 'frontend', 'universal', 'human'],
-  'vue': ['project', 'frontend', 'universal', 'human'],
-  'vue-ts': ['project', 'frontend', 'universal', 'human'],
-  'svelte': ['project', 'frontend', 'universal', 'human'],
-  'svelte-ts': ['project', 'frontend', 'universal', 'human'],
-  'angular': ['project', 'frontend', 'universal', 'human'],
-  'static-html': ['project', 'frontend', 'human'],
+  // Tool Type (simple scripts - project + core universal + human)
+  // No hosting, cicd, build_tool, linter needed for standalone scripts
+  'tool': ['project', 'universal_core', 'human'],
+  // CLI/Tool Types (project + full universal + human)
+  'cli': ['project', 'universal_core', 'universal_infra', 'human'],
+  'cli-tool': ['project', 'universal_core', 'universal_infra', 'human'],
+  'cli-ts': ['project', 'universal_core', 'universal_infra', 'human'],
+  'cli-js': ['project', 'universal_core', 'universal_infra', 'human'],
+  // Library/Package Types (project + full universal + human)
+  'library': ['project', 'universal_core', 'universal_infra', 'human'],
+  'npm-package': ['project', 'universal_core', 'universal_infra', 'human'],
+  'pip-package': ['project', 'universal_core', 'universal_infra', 'human'],
+  'crate': ['project', 'universal_core', 'universal_infra', 'human'],
+  'typescript': ['project', 'universal_core', 'universal_infra', 'human'],
+  // AI/ML Types (project + backend + core universal + human)
+  'data-science': ['project', 'backend', 'universal_core', 'human'],
+  'ml-model': ['project', 'backend', 'universal_core', 'human'],
+  'mcp-server': ['project', 'backend', 'universal_core', 'human'],
+  // Backend/API Types (project + backend + full universal + human)
+  'backend-api': ['project', 'backend', 'universal_core', 'universal_infra', 'human'],
+  'node-api': ['project', 'backend', 'universal_core', 'universal_infra', 'human'],
+  'node-api-ts': ['project', 'backend', 'universal_core', 'universal_infra', 'human'],
+  'python-api': ['project', 'backend', 'universal_core', 'universal_infra', 'human'],
+  'python-app': ['project', 'backend', 'universal_core', 'human'],
+  'python-generic': ['project', 'backend', 'universal_core', 'human'],
+  'go-api': ['project', 'backend', 'universal_core', 'universal_infra', 'human'],
+  'rust-api': ['project', 'backend', 'universal_core', 'universal_infra', 'human'],
+  // Frontend Types (project + frontend + full universal + human)
+  'frontend': ['project', 'frontend', 'universal_core', 'universal_infra', 'human'],
+  'react': ['project', 'frontend', 'universal_core', 'universal_infra', 'human'],
+  'react-ts': ['project', 'frontend', 'universal_core', 'universal_infra', 'human'],
+  'vue': ['project', 'frontend', 'universal_core', 'universal_infra', 'human'],
+  'vue-ts': ['project', 'frontend', 'universal_core', 'universal_infra', 'human'],
+  'svelte': ['project', 'frontend', 'universal_core', 'universal_infra', 'human'],
+  'svelte-ts': ['project', 'frontend', 'universal_core', 'universal_infra', 'human'],
+  'angular': ['project', 'frontend', 'universal_core', 'universal_infra', 'human'],
+  'static-html': ['project', 'frontend', 'universal_core', 'human'],
   // Fullstack Types (all categories)
-  'fullstack': ['project', 'frontend', 'backend', 'universal', 'human'],
-  'fullstack-ts': ['project', 'frontend', 'backend', 'universal', 'human'],
-  'nextjs': ['project', 'frontend', 'backend', 'universal', 'human'],
-  'django': ['project', 'frontend', 'backend', 'universal', 'human'],
-  'rails': ['project', 'frontend', 'backend', 'universal', 'human'],
-  // Mobile Types (project + frontend + human)
-  'mobile': ['project', 'frontend', 'human'],
-  'react-native': ['project', 'frontend', 'human'],
-  'flutter': ['project', 'frontend', 'human'],
-  'ios': ['project', 'frontend', 'human'],
-  'android': ['project', 'frontend', 'human'],
-  // Desktop Types (project + frontend + human)
-  'desktop': ['project', 'frontend', 'human'],
-  'electron': ['project', 'frontend', 'human'],
-  'tauri': ['project', 'frontend', 'human'],
+  'fullstack': ['project', 'frontend', 'backend', 'universal_core', 'universal_infra', 'human'],
+  'fullstack-ts': ['project', 'frontend', 'backend', 'universal_core', 'universal_infra', 'human'],
+  'nextjs': ['project', 'frontend', 'backend', 'universal_core', 'universal_infra', 'human'],
+  'django': ['project', 'frontend', 'backend', 'universal_core', 'universal_infra', 'human'],
+  'rails': ['project', 'frontend', 'backend', 'universal_core', 'universal_infra', 'human'],
+  // Mobile Types (project + frontend + core universal + human)
+  'mobile': ['project', 'frontend', 'universal_core', 'human'],
+  'react-native': ['project', 'frontend', 'universal_core', 'human'],
+  'flutter': ['project', 'frontend', 'universal_core', 'human'],
+  'ios': ['project', 'frontend', 'universal_core', 'human'],
+  'android': ['project', 'frontend', 'universal_core', 'human'],
+  // Desktop Types (project + frontend + core universal + human)
+  'desktop': ['project', 'frontend', 'universal_core', 'human'],
+  'electron': ['project', 'frontend', 'universal_core', 'human'],
+  'tauri': ['project', 'frontend', 'universal_core', 'human'],
   // DevOps/Infra Types (project + human)
   'terraform': ['project', 'human'],
   'kubernetes': ['project', 'human'],
@@ -133,7 +137,7 @@ const AI_TYPE_TO_FAF_TYPE: Record<string, string> = {
   'mobile-app': 'mobile',
   'desktop-app': 'desktop',
   'framework': 'library',
-  'tool': 'cli',
+  'tool': 'tool',
   'plugin': 'library',
   'data-science': 'data-science',
   'devops': 'infrastructure',
@@ -142,6 +146,9 @@ const AI_TYPE_TO_FAF_TYPE: Record<string, string> = {
 /**
  * Infer the correct project type using scanner, AI, and framework detector.
  * Overrides the broken detectProjectType() which misclassifies C++ projects as python-generic.
+ *
+ * Distinguishes 'tool' (simple scripts, no build/deploy infra) from 'cli' (proper CLI with
+ * framework, packaging, CI/CD expectations).
  */
 function inferProjectType(
   scanResult: LocalScanResult,
@@ -170,7 +177,23 @@ function inferProjectType(
     return 'library';
   }
 
-  // Priority 4: Original type (if valid and not a misclassification)
+  // Priority 4: Distinguish 'tool' from 'cli' for script-based projects
+  // A 'tool' is a simple script collection without CLI framework, packaging, or build infra.
+  // Heuristic: no package.json bin, no Cargo.toml [bin], no setup.py console_scripts,
+  // and original type suggests a simple project (python-generic, latest-idea, etc.)
+  if (originalType === 'python-generic' || originalType === 'latest-idea') {
+    const topFiles = scanResult.topLevelStructure.map(f => f.path);
+    const hasPackageJson = topFiles.includes('package.json');
+    const hasSetupPy = topFiles.includes('setup.py') || topFiles.includes('setup.cfg');
+    const hasPyprojectBuild = topFiles.includes('pyproject.toml'); // Could be a proper package
+
+    // Simple scripts: no formal packaging, just .py files + maybe requirements.txt
+    if (!hasPackageJson && !hasSetupPy && !hasPyprojectBuild) {
+      return 'tool';
+    }
+  }
+
+  // Priority 5: Original type (if valid and not a misclassification)
   if (originalType && TYPE_APPLICABLE_CATEGORIES[originalType]) {
     return originalType;
   }
@@ -185,7 +208,7 @@ function inferProjectType(
  */
 function getApplicableSlots(projectType: string): string[] {
   const categories = TYPE_APPLICABLE_CATEGORIES[projectType]
-    || ['project', 'frontend', 'backend', 'universal', 'human']; // Default: all
+    || ['project', 'frontend', 'backend', 'universal_core', 'universal_infra', 'human']; // Default: all
 
   const allSlots = Object.keys(SLOT_CATEGORY_MAP);
   return allSlots.filter(slot => categories.includes(SLOT_CATEGORY_MAP[slot]));
@@ -498,6 +521,28 @@ export async function generateFafFromProject(
       contextSlotsFilled['build_tool'] = 'Maven';
     } else if (topFiles.includes('build.zig')) {
       contextSlotsFilled['build_tool'] = 'Zig Build';
+    }
+  }
+
+  // Package manager detection for Python projects
+  if (!contextSlotsFilled['package_manager']) {
+    if (pyprojectPath) {
+      if (pyprojectData.packageManager) {
+        contextSlotsFilled['package_manager'] = pyprojectData.packageManager;
+      } else {
+        try {
+          const pyContent = await fs.readFile(pyprojectPath, "utf-8");
+          if (pyContent.includes('[tool.pdm]')) {
+            contextSlotsFilled['package_manager'] = 'PDM';
+          } else if (pyContent.includes('[tool.hatch]') || pyContent.includes('[tool.hatchling]')) {
+            contextSlotsFilled['package_manager'] = 'Hatch';
+          } else if (pyContent.includes('[build-system]')) {
+            contextSlotsFilled['package_manager'] = 'pip (pyproject.toml)';
+          }
+        } catch { /* ignore */ }
+      }
+    } else if (requirementsPath) {
+      contextSlotsFilled['package_manager'] = 'pip';
     }
   }
 

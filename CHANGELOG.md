@@ -5,6 +5,88 @@ All notable changes to faf-cli will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [4.2.1] - 2026-02-08 — Scoring Fairness: Tool Type + Package Manager + Clean Structure
+
+### Summary
+
+Three targeted fixes to the scoring system that make results fairer for simple script-based projects and improve output quality for all projects.
+
+### Changes
+
+#### 1. Fix: Package manager detection from `requirements.txt` / `pyproject.toml`
+
+**Problem:** Python projects with `requirements.txt` or `pyproject.toml` never got their `package_manager` slot filled. The `pyprojectData.packageManager` was set to `'Poetry'` during parsing but never written to `contextSlotsFilled`. And `requirements.txt` presence was completely ignored for package manager detection.
+
+**Fix in `src/generators/faf-generator-championship.ts`:**
+- After Docker detection, added a new block that fills `package_manager` from:
+  - `pyproject.toml` with `[tool.poetry]` → `Poetry`
+  - `pyproject.toml` with `[tool.pdm]` → `PDM`
+  - `pyproject.toml` with `[tool.hatch]` → `Hatch`
+  - `pyproject.toml` with `[build-system]` → `pip (pyproject.toml)`
+  - `requirements.txt` presence → `pip`
+- Guard: only fills if not already set by framework detector or Bun/Cargo detection
+
+#### 2. New: `tool` project type with lighter scoring
+
+**Problem:** Simple Python scripts (PDFtoMarkdown, MiroBoardDuplicator) were scored as `cli` which expects CI/CD, hosting, build tools, and linting. A personal script collection shouldn't be penalized for not having GitHub Actions or a linter.
+
+**Fix:** Split the `universal` slot category into two tiers:
+
+| Category | Slots | When applicable |
+|----------|-------|-----------------|
+| `universal_core` | `package_manager`, `test_framework` | Almost all projects |
+| `universal_infra` | `hosting`, `cicd`, `build_tool`, `linter` | Proper CLIs, libraries, apps |
+
+Added `tool` project type: `['project', 'universal_core', 'human']` = 11 applicable slots (9 N/A).
+
+**Detection heuristic** in `inferProjectType()`:
+- If original type is `python-generic` or `latest-idea`
+- AND project has no `package.json`, no `setup.py`, no `pyproject.toml`
+- THEN classify as `tool` (simple script collection)
+
+All existing types updated to use `universal_core` + `universal_infra` (no behaviour change for them). The `tool` type only gets `universal_core`.
+
+**Files changed:**
+- `src/generators/faf-generator-championship.ts`: `SLOT_CATEGORY_MAP` split, `TYPE_APPLICABLE_CATEGORIES` updated, `AI_TYPE_TO_FAF_TYPE` maps `tool` → `tool`, `inferProjectType()` adds tool detection logic
+
+#### 3. Fix: Structure output now filters junk files and directories
+
+**Problem:** Structure listing included `__pycache__`, `.bak` files, 13MB log files, editor swap files, and other noise that cluttered the `.faf` output and provided no useful context.
+
+**Fix in `src/engines/local-project-scanner.ts` → `scanTopLevelStructure()`:**
+
+Added three filter layers:
+
+| Filter | What it catches |
+|--------|----------------|
+| `SKIP_STRUCTURE_DIRS` | `__pycache__`, `node_modules`, `venv`, `dist`, `build`, `target`, `coverage`, `__MACOSX`, etc. (28 patterns) |
+| `SKIP_STRUCTURE_PATTERNS` | `.bak`, `.log`, `.tmp`, `.swp`, `~`, `.pyc`, `.DS_Store`, `Thumbs.db` |
+| `MAX_STRUCTURE_FILE_SIZE` | Files > 1MB skipped (likely generated data, logs, media) |
+
+### Results
+
+| Project | Before (4.2.0) | After (4.2.1) | Change |
+|---------|----------------|---------------|--------|
+| PDFtoMarkdown | 67% (10/15) | **100% (11/11)** | `tool` type + pip detected |
+| MiroBoardDuplicator | 60% (9/15) | **82% (9/11)** | `tool` type (no requirements.txt, no tests - honest) |
+| whisper.cpp | 87% (13/15) | **87% (13/15)** | No change (correctly `library`) |
+
+### Full scoring journey (original → final)
+
+| Project | Original `faf init` | After 4.2.0 | After 4.2.1 |
+|---------|---------------------|-------------|-------------|
+| whisper.cpp | 33% | 87% | **87%** |
+| MiroBoardDuplicator | 24% | 60% | **82%** |
+| PDFtoMarkdown | 33% | 67% | **100%** |
+
+### Fork Information
+
+- **Upstream**: [Wolfe-Jam/faf-cli](https://github.com/Wolfe-Jam/faf-cli)
+- **Fork**: [theaiconsultantuk/faf-cli](https://github.com/theaiconsultantuk/faf-cli)
+- **Author**: Paul Cowen (The AI Consultant UK)
+
+---
+
 ## [4.2.0] - 2026-02-08 — The Pauly Engine: Intelligent Local Scanning
 
 ### The Problem
